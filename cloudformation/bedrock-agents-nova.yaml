@@ -1,0 +1,157 @@
+# cloudformation/bedrock-agents-nova.yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DevAgent Swarm - Bedrock Multi-Agent System with Amazon Nova'
+
+Parameters:
+  BedrockRoleArn:
+    Type: String
+    Description: IAM role ARN for Bedrock Agents
+    Default: ''
+
+Resources:
+  # ===== CODE REVIEW AGENT =====
+  CodeReviewAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: DevAgent-CodeReview
+      Description: 'Specialized agent for security and code quality review'
+      FoundationModel: amazon.nova-pro-v1:0
+      Instruction: |
+        You are a senior security engineer performing code reviews.
+        
+        Your job: Identify security vulnerabilities and code quality issues.
+        
+        For EACH issue found, provide:
+        1. Severity (CRITICAL, HIGH, MEDIUM, LOW)
+        2. Type (sql_injection, hardcoded_secret, etc)
+        3. Line number if visible
+        4. What's wrong
+        5. How to fix it
+        
+        Return ONLY JSON format:
+        {
+          "issues": [
+            {
+              "severity": "CRITICAL",
+              "type": "sql_injection",
+              "line": 47,
+              "message": "SQL injection vulnerability",
+              "description": "User input directly in SQL query",
+              "suggestion": "Use parameterized queries"
+            }
+          ],
+          "summary": "Found N critical issues"
+        }
+      AgentResourceRoleArn: !Ref BedrockRoleArn
+      IdleSessionTTLInSeconds: 600
+
+  # ===== TESTING AGENT =====
+  TestingAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: DevAgent-Testing
+      Description: 'Specialized agent for automated test generation'
+      FoundationModel: amazon.nova-pro-v1:0
+      Instruction: |
+        You are a test automation expert for Python/pytest.
+        
+        Your job: Generate comprehensive unit tests for code.
+        
+        Provide:
+        1. Test cases for happy path
+        2. Edge cases and boundaries
+        3. Error scenarios
+        4. Mocks for dependencies
+        
+        Return ONLY JSON:
+        {
+          "test_cases": [
+            {
+              "name": "test_authenticate_valid_credentials",
+              "description": "Test with valid credentials",
+              "code": "def test_...(): ..."
+            }
+          ],
+          "estimated_coverage": 0.95,
+          "summary": "Generated N test cases"
+        }
+      AgentResourceRoleArn: !Ref BedrockRoleArn
+      IdleSessionTTLInSeconds: 600
+
+  # ===== DOCUMENTATION AGENT =====
+  DocumentationAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: DevAgent-Documentation
+      Description: 'Specialized agent for documentation generation'
+      FoundationModel: amazon.nova-pro-v1:0
+      Instruction: |
+        You are a technical writer for API documentation.
+        
+        Your job: Generate OpenAPI specs and README sections.
+        
+        Provide:
+        1. OpenAPI 3.0 endpoint definitions
+        2. Request/response examples
+        3. README sections
+        
+        Return ONLY JSON:
+        {
+          "openapi": {...},
+          "readme_sections": {...},
+          "summary": "Generated documentation"
+        }
+      AgentResourceRoleArn: !Ref BedrockRoleArn
+      IdleSessionTTLInSeconds: 600
+
+  # ===== SUPERVISOR AGENT =====
+  SupervisorAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: DevAgent-Supervisor
+      Description: 'Supervisor agent coordinating all specialist agents'
+      FoundationModel: amazon.nova-pro-v1:0
+      Instruction: |
+        You are the supervisor coordinator for code analysis.
+        
+        Your job: Receive code and coordinate specialist agents:
+        - Code Review Agent (security & quality)
+        - Testing Agent (tests)
+        - Documentation Agent (docs)
+        
+        Workflow:
+        1. Send code to Code Review Agent first
+        2. Send code to Testing Agent
+        3. Send code to Documentation Agent
+        4. Consolidate results
+        
+        Return consolidated JSON:
+        {
+          "code_review": {...from code review agent...},
+          "testing": {...from testing agent...},
+          "documentation": {...from docs agent...},
+          "summary": "Complete analysis"
+        }
+      AgentResourceRoleArn: !Ref BedrockRoleArn
+      IdleSessionTTLInSeconds: 600
+
+Outputs:
+  SupervisorAgentId:
+    Value: !Ref SupervisorAgent
+    Export:
+      Name: DevAgent-SupervisorId
+  
+  CodeReviewAgentId:
+    Value: !Ref CodeReviewAgent
+    Export:
+      Name: DevAgent-CodeReviewId
+  
+  TestingAgentId:
+    Value: !Ref TestingAgent
+    Export:
+      Name: DevAgent-TestingId
+  
+  DocumentationAgentId:
+    Value: !Ref DocumentationAgent
+    Export:
+      Name: DevAgent-DocumentationId

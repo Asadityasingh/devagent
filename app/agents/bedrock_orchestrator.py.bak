@@ -1,0 +1,234 @@
+# app/agents/bedrock_orchestrator.py
+import boto3
+import json
+from typing import Dict, Any, Optional
+import structlog
+from app.config import get_settings
+
+logger = structlog.get_logger()
+settings = get_settings()
+
+class BedrockAgentOrchestrator:
+    """Orchestrates multi-agent system using AWS Bedrock Agents"""
+    
+    def __init__(self):
+        self.runtime_client = boto3.client(
+            'bedrock-agent-runtime',
+            region_name=settings.aws_region
+        )
+        self.supervisor_agent_id = settings.bedrock_supervisor_agent_id
+        self.agent_alias_id = 'TSTALIASID'  # Test alias (default)
+    
+    async def invoke_supervisor(
+        self,
+        code: str,
+        language: str,
+        filename: Optional[str] = None,
+        context: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Invoke supervisor agent to coordinate code analysis
+        
+        Args:
+            code: Source code to analyze
+            language: Programming language
+            filename: Optional filename
+            context: Additional context
+        
+        Returns:
+            Dict with consolidated results from all agents
+        """
+        
+        # Build prompt for supervisor
+        prompt = self._build_supervisor_prompt(code, language, filename, context)
+        
+        try:
+            logger.info(
+                "invoking_supervisor_agent",
+                agent_id=self.supervisor_agent_id,
+                language=language
+            )
+            
+            # Invoke supervisor agent
+            response = self.runtime_client.invoke_agent(
+                agentId=self.supervisor_agent_id,
+                agentAliasId=self.agent_alias_id,
+                sessionId=f"session-{hash(code) % 10000}",  # Simple session ID
+                inputText=prompt,
+                enableTrace=False  # Set True for debugging
+            )
+            
+            # Process streaming response
+            result = self._process_agent_response(response)
+            
+            logger.info(
+                "supervisor_invocation_success",
+                agents_used=result.get('agents_invoked', [])
+            )
+            
+            return {
+                'success': True,
+                'results': result
+            }
+        
+        except Exception as e:
+            logger.error("supervisor_invocation_failed", error=str(e))
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    async def invoke_code_review_agent(
+        self,
+        code: str,
+        language: str
+    ) -> Dict[str, Any]:
+        """
+        Directly invoke Code Review Agent (for testing)
+        
+        Args:
+            code: Source code
+            language: Programming language
+        
+        Returns:
+            Code review results
+        """
+        
+        if not settings.bedrock_code_review_agent_id:
+            raise ValueError("Code Review Agent ID not configured")
+        
+        prompt = f"""Analyze this {language} code for security vulnerabilities and quality issues: {code}
+
+Provide detailed security analysis with specific issues, line numbers, and fixes.
+Return results as JSON."""
+
+        try:
+            response = self.runtime_client.invoke_agent(
+                agentId=settings.bedrock_code_review_agent_id,
+                agentAliasId=self.agent_alias_id,
+                sessionId=f"review-{hash(code) % 10000}",
+                inputText=prompt,
+                enableTrace=False
+            )
+            
+            result = self._process_agent_response(response)
+            
+            return {
+                'success': True,
+                'review': result
+            }
+        
+        except Exception as e:
+            logger.error("code_review_agent_failed", error=str(e))
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
+    def _build_supervisor_prompt(
+        self,
+        code: str,
+        language: str,
+        filename: Optional[str],
+        context: Optional[str]
+    ) -> str:
+        """Build structured prompt for supervisor agent"""
+        
+        prompt = f"""Analyze this {language} code using your specialist agents.
+
+File: {filename or 'unknown'}
+Language: {language}
+
+Code: {code}
+"""
+        
+        if context:
+            prompt += f"\nContext: {context}\n"
+        
+        prompt += """
+Please coordinate with:
+1. Code Review Agent - for security and quality analysis
+2. Testing Agent - for test generation
+3. Documentation Agent - for documentation
+
+Provide comprehensive results from all agents.
+"""
+        
+        return prompt
+    
+    def _process_agent_response(self, response) -> Dict[str, Any]:
+        """
+        Process streaming response from Bedrock Agent
+        
+        Args:
+            response: Response from invoke_agent
+        
+        Returns:
+            Parsed response data
+        """
+        result_text = ""
+        
+        # Stream events from agent
+        for event in response.get('completion', []):
+            if 'chunk' in event:
+                chunk = event['chunk']
+                if 'bytes' in chunk:
+                    result_text += chunk['bytes'].decode('utf-8')
+        
+        # Try to parse as JSON
+        try:
+            return json.loads(result_text)
+        except json.JSONDecodeError:
+            # Return as text if not JSON
+            return {
+                'response': result_text,
+                'format': 'text'
+            }
+
+# Test orchestrator
+async def test_orchestrator():
+    """Test Bedrock Agent orchestrator"""
+    
+    orchestrator = BedrockAgentOrchestrator()
+    
+    # Test code
+    test_code = """
+def authenticate(username, password):
+    query = f"SELECT * FROM users WHERE username='{username}'"
+    cursor.execute(query)
+    return cursor.fetchone()
+"""
+    
+    print("🤖 Testing Bedrock Agent Orchestrator...")
+    print(f"Supervisor Agent ID: {orchestrator.supervisor_agent_id}")
+    
+    # Test code review agent directly
+    print("\n1. Testing Code Review Agent directly...")
+    result = await orchestrator.invoke_code_review_agent(
+        code=test_code,
+        language="python"
+    )
+    
+    if result['success']:
+        print("✅ Code Review Agent working!")
+        print(f"Response: {json.dumps(result['review'], indent=2)[:200]}...")
+    else:
+        print(f"❌ Failed: {result['error']}")
+    
+    # Test supervisor (multi-agent)
+    print("\n2. Testing Supervisor Agent (multi-agent)...")
+    result = await orchestrator.invoke_supervisor(
+        code=test_code,
+        language="python",
+        filename="auth.py"
+    )
+    
+    if result['success']:
+        print("✅ Supervisor Agent working!")
+        print(f"Results: {json.dumps(result['results'], indent=2)[:300]}...")
+    else:
+        print(f"❌ Failed: {result['error']}")
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(test_orchestrator())
